@@ -230,6 +230,60 @@ class RandomPatch(object):
         return img
 
 
+class ColorJitterP(ColorJitter):
+
+    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0, p=0.5):
+        self.p = p
+        super().__init__(brightness, contrast, saturation, hue)
+    
+    def forward(self, img):
+        if random.uniform(0, 1) > self.p:
+            return img
+        else:
+            return super().forward(img)
+
+
+class GaussNoise(torch.nn.Module):
+
+    def __init__(self, sigma_limit=(0.008, 0.03), mean=0, per_channel=True, p=0.5) -> None:
+        super().__init__()
+        self.sigma_limit = sigma_limit
+        self.mean = mean
+        self.per_channel = per_channel
+        self.p = p
+
+    def forward(self, img: torch.Tensor):  # CHW in [0, 1]
+        if random.uniform(0, 1) > self.p:
+            return img
+        else:
+            sigma = random.uniform(self.sigma_limit[0], self.sigma_limit[1])
+
+            if self.per_channel:
+                gauss = torch.normal(self.mean, sigma, img.shape)
+            else:
+                gauss = torch.normal(self.mean, sigma, img.shape[1:])
+                if len(img.shape) == 3:
+                    gauss = gauss[None, ...]
+
+            return torch.clip(img + gauss, 0.0, 1.0)
+
+
+class ChannelShuffle(torch.nn.Module):
+
+    def __init__(self, p=0.5) -> None:
+        super().__init__()
+        self.p = p
+
+    def forward(self, img: torch.Tensor):  # CHW in [0, 1]
+        if random.uniform(0, 1) > self.p:
+            return img
+        else:
+            channels_shuffled = list(range(img.shape[0]))
+            random.shuffle(channels_shuffled)
+            img = img[channels_shuffled, ...]
+            return img
+
+
 def build_transforms(
     height,
     width,
@@ -297,18 +351,30 @@ def build_transforms(
     if 'color_jitter' in transforms:
         print('+ color jitter')
         transform_tr += [
-            ColorJitter(brightness=0.2, contrast=0.15, saturation=0, hue=0)
+            # ColorJitter(brightness=0.2, contrast=0.15, saturation=0, hue=0)
+            ColorJitterP(brightness=0.25, contrast=0.15, saturation=0.15, hue=0.4, p=0.5)
         ]
 
     print('+ to torch tensor of range [0, 1]')
     transform_tr += [ToTensor()]
+
+    if 'channel_shuffle' in transforms:
+        print('+ channel_shuffle')
+        transform_tr += [ChannelShuffle()]
+
+    if 'gauss_noise' in transforms:
+        print('+ gauss_noise')
+        transform_tr += [GaussNoise()]
 
     print('+ normalization (mean={}, std={})'.format(norm_mean, norm_std))
     transform_tr += [normalize]
 
     if 'random_erase' in transforms:
         print('+ random erase')
-        transform_tr += [RandomErasing(mean=norm_mean)]
+        transform_tr += [
+            # RandomErasing(mean=norm_mean)
+            RandomErasing(sl=0.1, sh=0.5, r1=3.0, mean=norm_mean)
+        ]
 
     transform_tr = Compose(transform_tr)
 

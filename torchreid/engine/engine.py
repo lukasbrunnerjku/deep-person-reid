@@ -321,7 +321,7 @@ class Engine(object):
             print('##### Evaluating {} ({}) #####'.format(name, domain))
             query_loader = self.test_loader[name]['query']
             gallery_loader = self.test_loader[name]['gallery']
-            rank1, mAP = self._evaluate(
+            rank1, mAP, acc = self._evaluate(
                 dataset_name=name,
                 query_loader=query_loader,
                 gallery_loader=gallery_loader,
@@ -338,6 +338,7 @@ class Engine(object):
             if self.writer is not None:
                 self.writer.add_scalar(f'Test/{name}/rank1', rank1, self.epoch)
                 self.writer.add_scalar(f'Test/{name}/mAP', mAP, self.epoch)
+                self.writer.add_scalar(f'Test/{name}/acc', acc, self.epoch)
 
         return rank1
 
@@ -386,6 +387,12 @@ class Engine(object):
 
         print('Speed: {:.4f} sec/batch'.format(batch_time.avg))
 
+        print('Compute accuracy from gallery features ...')
+        output = self.model.classifier(gf.cuda()).cpu()
+        target = torch.from_numpy(g_pids)
+        acc = metrics.accuracy(output, target)[0].item()
+        print('Done, obtained accuracy from classifier {}-by-{} matrix'.format(output.size(0), output.size(1)))
+
         if normalize_feature:
             print('Normalzing features with L2 norm ...')
             qf = F.normalize(qf, p=2, dim=1)
@@ -414,6 +421,7 @@ class Engine(object):
         )
 
         print('** Results **')
+        print('acc: {:.1%}'.format(acc/100))
         print('mAP: {:.1%}'.format(mAP))
         print('CMC curve')
         for r in ranks:
@@ -430,7 +438,7 @@ class Engine(object):
                 topk=visrank_topk
             )
 
-        return cmc[0], mAP
+        return cmc[0], mAP, acc
 
     def compute_loss(self, criterion, outputs, targets):
         if isinstance(outputs, (tuple, list)):
