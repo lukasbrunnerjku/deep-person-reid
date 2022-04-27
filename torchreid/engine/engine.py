@@ -6,9 +6,11 @@ import datetime
 from collections import OrderedDict
 import torch
 from torch.nn import functional as F
+import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 
 from torchreid import metrics
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from torchreid.utils import (
     MetricMeter, AverageMeter, re_ranking, open_all_layers, save_checkpoint,
     open_specified_layers, visualize_ranked_results
@@ -321,7 +323,7 @@ class Engine(object):
             print('##### Evaluating {} ({}) #####'.format(name, domain))
             query_loader = self.test_loader[name]['query']
             gallery_loader = self.test_loader[name]['gallery']
-            rank1, mAP, acc = self._evaluate(
+            rank1, mAP, acc, cm_fig = self._evaluate(
                 dataset_name=name,
                 query_loader=query_loader,
                 gallery_loader=gallery_loader,
@@ -339,6 +341,7 @@ class Engine(object):
                 self.writer.add_scalar(f'Test/{name}/rank1', rank1, self.epoch)
                 self.writer.add_scalar(f'Test/{name}/mAP', mAP, self.epoch)
                 self.writer.add_scalar(f'Test/{name}/acc', acc, self.epoch)
+                self.writer.add_figure(f'Test/{name}/cm', cm_fig, self.epoch)
 
         return rank1
 
@@ -377,9 +380,9 @@ class Engine(object):
             camids_ = np.asarray(camids_)
             return f_, pids_, camids_
 
-        print('Extracting features from query set ...')
-        qf, q_pids, q_camids = _feature_extraction(query_loader)
-        print('Done, obtained {}-by-{} matrix'.format(qf.size(0), qf.size(1)))
+        # print('Extracting features from query set ...')
+        # qf, q_pids, q_camids = _feature_extraction(query_loader)
+        # print('Done, obtained {}-by-{} matrix'.format(qf.size(0), qf.size(1)))
 
         print('Extracting features from gallery set ...')
         gf, g_pids, g_camids = _feature_extraction(gallery_loader)
@@ -387,58 +390,80 @@ class Engine(object):
 
         print('Speed: {:.4f} sec/batch'.format(batch_time.avg))
 
-        print('Compute accuracy from gallery features ...')
-        output = self.model.classifier(gf.cuda()).cpu()
-        target = torch.from_numpy(g_pids)
+        train_loader_t = self.datamanager.train_loader_t
+        if train_loader_t is not None:
+            print('Extracting features from train set ...')
+            tf, t_pids, t_camids = _feature_extraction(train_loader_t)
+            print('Done, obtained {}-by-{} matrix'.format(tf.size(0), tf.size(1)))
+
+            features = torch.concat([tf, gf], dim=0)
+            target = torch.from_numpy(np.concatenate([t_pids, g_pids], axis=0))
+        else:
+            features = gf
+            target = torch.from_numpy(g_pids)
+
+        print('Compute accuracy from (all) target features ...')
+        output = self.model.classifier(features.cuda()).cpu()
         acc = metrics.accuracy(output, target)[0].item()
         print('Done, obtained accuracy from classifier {}-by-{} matrix'.format(output.size(0), output.size(1)))
 
-        if normalize_feature:
-            print('Normalzing features with L2 norm ...')
-            qf = F.normalize(qf, p=2, dim=1)
-            gf = F.normalize(gf, p=2, dim=1)
+        print('Compute confusion matrix from (all) target features ...')
+        pred = torch.argmax(output, dim=1)
+        cm = confusion_matrix(target, pred)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+        disp.plot()
+        cm_fig = disp.figure_
+        print('Done, obtained figure of confusion matrix')
 
-        print(
-            'Computing distance matrix with metric={} ...'.format(dist_metric)
-        )
-        distmat = metrics.compute_distance_matrix(qf, gf, dist_metric)
-        distmat = distmat.numpy()
+        # if normalize_feature:
+        #     print('Normalzing features with L2 norm ...')
+        #     qf = F.normalize(qf, p=2, dim=1)
+        #     gf = F.normalize(gf, p=2, dim=1)
 
-        if rerank:
-            print('Applying person re-ranking ...')
-            distmat_qq = metrics.compute_distance_matrix(qf, qf, dist_metric)
-            distmat_gg = metrics.compute_distance_matrix(gf, gf, dist_metric)
-            distmat = re_ranking(distmat, distmat_qq, distmat_gg)
+        # print(
+        #     'Computing distance matrix with metric={} ...'.format(dist_metric)
+        # )
+        # distmat = metrics.compute_distance_matrix(qf, gf, dist_metric)
+        # distmat = distmat.numpy()
 
-        print('Computing CMC and mAP ...')
-        cmc, mAP = metrics.evaluate_rank(
-            distmat,
-            q_pids,
-            g_pids,
-            q_camids,
-            g_camids,
-            use_metric_cuhk03=use_metric_cuhk03
-        )
+        # if rerank:
+        #     print('Applying person re-ranking ...')
+        #     distmat_qq = metrics.compute_distance_matrix(qf, qf, dist_metric)
+        #     distmat_gg = metrics.compute_distance_matrix(gf, gf, dist_metric)
+        #     distmat = re_ranking(distmat, distmat_qq, distmat_gg)
+
+        # print('Computing CMC and mAP ...')
+        # cmc, mAP = metrics.evaluate_rank(
+        #     distmat,
+        #     q_pids,
+        #     g_pids,
+        #     q_camids,
+        #     g_camids,
+        #     use_metric_cuhk03=use_metric_cuhk03
+        # )
 
         print('** Results **')
         print('acc: {:.1%}'.format(acc/100))
-        print('mAP: {:.1%}'.format(mAP))
-        print('CMC curve')
-        for r in ranks:
-            print('Rank-{:<3}: {:.1%}'.format(r, cmc[r - 1]))
+        # print('mAP: {:.1%}'.format(mAP))
+        # print('CMC curve')
+        # for r in ranks:
+        #     print('Rank-{:<3}: {:.1%}'.format(r, cmc[r - 1]))
 
-        if visrank:
-            visualize_ranked_results(
-                distmat,
-                self.datamanager.fetch_test_loaders(dataset_name),
-                self.datamanager.data_type,
-                width=self.datamanager.width,
-                height=self.datamanager.height,
-                save_dir=osp.join(save_dir, 'visrank_' + dataset_name),
-                topk=visrank_topk
-            )
+        # if visrank:
+        #     visualize_ranked_results(
+        #         distmat,
+        #         self.datamanager.fetch_test_loaders(dataset_name),
+        #         self.datamanager.data_type,
+        #         width=self.datamanager.width,
+        #         height=self.datamanager.height,
+        #         save_dir=osp.join(save_dir, 'visrank_' + dataset_name),
+        #         topk=visrank_topk
+        #     )
 
-        return cmc[0], mAP, acc
+        cmc = [-1]  # dummy value
+        mAP = -1  # dummy value
+
+        return cmc[0], mAP, acc, cm_fig
 
     def compute_loss(self, criterion, outputs, targets):
         if isinstance(outputs, (tuple, list)):
