@@ -83,6 +83,13 @@ Make sure `conda <https://www.anaconda.com/distribution/>`_ is installed.
     # install torchreid (don't need to re-build it if you modify the source code)
     python setup.py develop
 
+    ... if "error: could not delete 'torchreid\metrics\rank_cylib\rank_cy.cp39-win_amd64.pyd': Access is denied"
+    then run cmd as admin?
+    or https://github.com/KaiyangZhou/deep-person-reid/issues/328 ?
+    => the last issue thread contains the solution:
+    delete ie. C:\Users\lbrunn\projects\haecker_space\torchreid\torchreid\metrics\rank_cylib\rank_cy.cp39-win_amd64.pyd
+    manually and then run the setup again!
+
 
 Get started: 30 seconds to Torchreid
 -------------------------------------
