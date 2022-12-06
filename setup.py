@@ -50,7 +50,7 @@ setup(
     license='MIT',
     long_description=readme(),
     url='https://github.com/KaiyangZhou/deep-person-reid',
-    packages=find_packages(),
+    packages=find_packages(".", include="torchreid*"),
     install_requires=get_requirements(),
     keywords=['Person Re-Identification', 'Deep Learning', 'Computer Vision'],
     ext_modules=cythonize(ext_modules)
